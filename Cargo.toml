@@ -1,0 +1,20 @@
+[package]
+name = "memhog"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+incremental = true
+
+[dependencies]
+bytesize = "^1.2.0"
+chrono = "^0.4.26"
+crossbeam = "^0.8.2"
+duckdb = { version = "^0.8.1" }
+eframe = { git = "https://github.com/theY4Kman/egui.git", branch = "table-row-select-and-frame", features = ["persistence"] }
+egui = { git = "https://github.com/theY4Kman/egui.git", branch = "table-row-select-and-frame", features = ["persistence"] }
+egui_extras = { git = "https://github.com/theY4Kman/egui.git", branch = "table-row-select-and-frame" }
+ouroboros = "^0.17.2"
+psutil = "^3.2.2"
+timer = "^0.2.0"
+users = "^0.11.0"
