@@ -8,6 +8,9 @@ use crossbeam::select;
 use duckdb::arrow::array::Array;
 use duckdb::types::{TimeUnit, ValueRef};
 use duckdb::{params, Connection, Rows, Statement};
+use eframe::epaint::text::LayoutSection;
+use egui::text::LayoutJob;
+use egui::Ui;
 use egui_extras::{Column, TableBuilder};
 use ouroboros::self_referencing;
 
@@ -23,10 +26,45 @@ pub struct QueryTableWindow {
     query_change_rx: Receiver<String>,
     refresh_thread: Option<thread::JoinHandle<()>>,
 
+    state: Arc<Mutex<QueryTableState>>,
+}
+
+struct QueryTableState {
     // We store stringified versions of each row, for display in the table
-    results: Arc<Mutex<Vec<Vec<String>>>>,
-    column_names: Arc<Mutex<Vec<String>>>,
-    error: Arc<Mutex<Option<String>>>,
+    results: Vec<Vec<String>>,
+    columns: Vec<QueryTableColumn>,
+    error: Option<String>,
+}
+
+struct QueryTableColumn {
+    name: String,
+    text_style: egui::TextStyle,
+    text_align: egui::Align,
+}
+
+impl QueryTableColumn {
+    pub fn label(&self, ui: &mut Ui, text: impl Into<String>) -> egui::Response {
+        let font_id = self.text_style.resolve(ui.style());
+        let text = text.into();
+
+        ui.with_layout(egui::Layout::top_down(self.text_align), |ui| {
+            ui.label(LayoutJob {
+                sections: vec![LayoutSection {
+                    leading_space: 0.0,
+                    byte_range: 0..text.len(),
+                    format: egui::TextFormat {
+                        font_id,
+                        color: ui.style().visuals.text_color(),
+                        ..Default::default()
+                    },
+                }],
+                text,
+                halign: self.text_align,
+                ..LayoutJob::default()
+            })
+        })
+        .response
+    }
 }
 
 #[self_referencing]
@@ -85,9 +123,11 @@ impl QueryTableWindow {
             query_change_rx,
             refresh_thread: None,
 
-            results: Arc::new(Mutex::new(Vec::new())),
-            column_names: Arc::new(Mutex::new(Vec::new())),
-            error: Arc::new(Mutex::new(None)),
+            state: Arc::new(Mutex::new(QueryTableState {
+                results: Vec::new(),
+                columns: Vec::new(),
+                error: None,
+            })),
         };
 
         slf.parse_query();
@@ -99,12 +139,12 @@ impl QueryTableWindow {
         match QueryExecutor::from_query(self.conn.try_clone().unwrap(), self.query.as_str()) {
             Ok(executor) => {
                 *self.executor.lock().unwrap() = Some(executor);
-                *self.error.lock().unwrap() = None;
+                self.state.lock().unwrap().deref_mut().error = None;
                 self.query_change_tx.send(self.query.clone()).unwrap();
             },
             Err(e) => {
                 *self.executor.lock().unwrap() = None;
-                *self.error.lock().unwrap() = Some(e.to_string());
+                self.state.lock().unwrap().deref_mut().error = Some(e.to_string());
             },
         }
 
@@ -112,19 +152,12 @@ impl QueryTableWindow {
     }
 
     pub fn refresh(&self) {
-        Self::_refresh(
-            Arc::clone(&self.executor),
-            Arc::clone(&self.results),
-            Arc::clone(&self.column_names),
-            Arc::clone(&self.error),
-        );
+        Self::_refresh(Arc::clone(&self.executor), Arc::clone(&self.state));
     }
 
     fn _refresh(
         mut executor: Arc<Mutex<Option<QueryExecutor>>>,
-        results: Arc<Mutex<Vec<Vec<String>>>>,
-        column_names: Arc<Mutex<Vec<String>>>,
-        error: Arc<Mutex<Option<String>>>,
+        state: Arc<Mutex<QueryTableState>>,
     ) {
         let mut executor_binding = executor.lock().unwrap();
         let maybe_executor = executor_binding.deref_mut();
@@ -135,17 +168,34 @@ impl QueryTableWindow {
         let executor = maybe_executor.as_mut().unwrap();
         executor
             .query(|rows| {
-                *error.lock().unwrap() = None;
+                let mut state_binding = state.lock().unwrap();
+                let state = state_binding.deref_mut();
 
-                *column_names.lock().unwrap() = rows
-                    .as_ref()
-                    .unwrap()
+                state.error = None;
+
+                let stmt = rows.as_ref().unwrap();
+                state.columns = stmt
                     .column_names()
                     .iter()
-                    .map(|s| s.to_string())
+                    .enumerate()
+                    .map(|(index, name)| {
+                        let data_type = stmt.column_type(index);
+
+                        let (text_style, text_align) = if data_type.is_numeric() {
+                            (egui::TextStyle::Monospace, egui::Align::RIGHT)
+                        } else {
+                            (egui::TextStyle::Body, egui::Align::LEFT)
+                        };
+
+                        QueryTableColumn {
+                            name: name.to_string(),
+                            text_style,
+                            text_align,
+                        }
+                    })
                     .collect();
 
-                let mut results = results.lock().unwrap();
+                let mut results = &mut state.results;
                 results.clear();
 
                 while let Some(row) = rows.next().expect("Error reading row") {
@@ -241,7 +291,7 @@ impl QueryTableWindow {
 impl Widget for QueryTableWindow {
     fn view(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
         egui::Window::new("Query").resizable(true).show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            {
                 let state_id = ui.make_persistent_id("query");
                 let mut query =
                     ui.data_mut(|storage| match storage.get_persisted::<String>(state_id) {
@@ -256,9 +306,17 @@ impl Widget for QueryTableWindow {
                         },
                     });
 
-                ui.label("Query:");
-                ui.text_edit_multiline(&mut query);
-                if ui.button("Run").clicked() {
+                ui.add_sized(
+                    [ui.available_width(), 0.0],
+                    egui::TextEdit::multiline(&mut query).desired_rows(10),
+                );
+
+                let run_button = ui.add_sized(
+                    [ui.available_width() / 2.0, 20.0],
+                    egui::Button::new("▶ Run"),
+                );
+
+                if run_button.clicked() {
                     self.query = query.clone();
                     self.parse_query();
                 }
@@ -266,16 +324,18 @@ impl Widget for QueryTableWindow {
                 ui.data_mut(|storage| {
                     storage.insert_persisted(state_id, query.clone());
                 });
-            });
+            }
 
-            if let Some(error) = self.error.lock().unwrap().deref() {
+            let state = self.state.lock().unwrap();
+
+            if let Some(error) = &state.error {
                 ui.label(error);
             }
 
-            let results = self.results.lock().unwrap();
-            let column_names = self.column_names.lock().unwrap();
+            let results = &state.results;
+            let columns = &state.columns;
 
-            if column_names.is_empty() {
+            if columns.is_empty() {
                 return;
             }
 
@@ -289,20 +349,21 @@ impl Widget for QueryTableWindow {
                     .resizable(true)
                     .selectable(true)
                     .frame(true)
-                    .columns(Column::auto(), column_names.len())
+                    .columns(Column::auto(), columns.len())
                     .header(20.0, |mut header| {
-                        for name in column_names.iter() {
+                        for col in columns.iter() {
                             header.col(|ui| {
-                                ui.label(name);
+                                col.label(ui, &col.name);
                             });
                         }
                     })
                     .body(|body| {
                         body.rows(20.0, results.len(), |idx, mut row| {
                             let data = &results[idx];
-                            for col_data in data {
+                            for (col_idx, col_data) in data.iter().enumerate() {
+                                let col = &columns[col_idx];
                                 row.col(|ui| {
-                                    ui.label(col_data);
+                                    col.label(ui, col_data);
                                 });
                             }
                         });
@@ -316,9 +377,7 @@ impl Widget for QueryTableWindow {
 
         let query = self.query.clone();
         let conn = self.conn.try_clone().unwrap();
-        let results = Arc::clone(&self.results);
-        let column_names = Arc::clone(&self.column_names);
-        let error = Arc::clone(&self.error);
+        let state = Arc::clone(&self.state);
 
         self.refresh_thread = Some(thread::spawn(move || {
             let executor = Arc::new(Mutex::new(
@@ -334,7 +393,7 @@ impl Widget for QueryTableWindow {
                     },
                     recv(on_query_change) -> res => {
                         if let Ok(query) = res {
-                            *executor.lock().unwrap().deref_mut() =
+                            *executor.lock().unwrap() =
                                 QueryExecutor::from_query(conn.try_clone().unwrap(), query.as_str()).ok();
                             continue;
                         } else {
@@ -344,11 +403,8 @@ impl Widget for QueryTableWindow {
                 }
 
                 let executor = Arc::clone(&executor);
-                let results = Arc::clone(&results);
-                let column_names = Arc::clone(&column_names);
-                let error = Arc::clone(&error);
-
-                Self::_refresh(executor, results, column_names, error);
+                let state = Arc::clone(&state);
+                Self::_refresh(executor, state);
             }
         }));
     }
