@@ -23,7 +23,6 @@ pub struct QueryTableWindow {
     query_change_rx: Receiver<String>,
     refresh_thread: Option<thread::JoinHandle<()>>,
 
-    has_executed: Arc<Mutex<bool>>,
     // We store stringified versions of each row, for display in the table
     results: Arc<Mutex<Vec<Vec<String>>>>,
     column_names: Arc<Mutex<Vec<String>>>,
@@ -86,7 +85,6 @@ impl QueryTableWindow {
             query_change_rx,
             refresh_thread: None,
 
-            has_executed: Arc::new(Mutex::new(false)),
             results: Arc::new(Mutex::new(Vec::new())),
             column_names: Arc::new(Mutex::new(Vec::new())),
             error: Arc::new(Mutex::new(None)),
@@ -116,7 +114,6 @@ impl QueryTableWindow {
     pub fn refresh(&self) {
         Self::_refresh(
             Arc::clone(&self.executor),
-            Arc::clone(&self.has_executed),
             Arc::clone(&self.results),
             Arc::clone(&self.column_names),
             Arc::clone(&self.error),
@@ -125,7 +122,6 @@ impl QueryTableWindow {
 
     fn _refresh(
         mut executor: Arc<Mutex<Option<QueryExecutor>>>,
-        has_executed: Arc<Mutex<bool>>,
         results: Arc<Mutex<Vec<Vec<String>>>>,
         column_names: Arc<Mutex<Vec<String>>>,
         error: Arc<Mutex<Option<String>>>,
@@ -237,8 +233,6 @@ impl QueryTableWindow {
                     }
                     results.push(row_strs);
                 }
-
-                *has_executed.lock().unwrap() = true;
             })
             .ok();
     }
@@ -278,15 +272,15 @@ impl Widget for QueryTableWindow {
                 ui.label(error);
             }
 
-            if !self.has_executed.lock().unwrap().deref() {
+            let results = self.results.lock().unwrap();
+            let column_names = self.column_names.lock().unwrap();
+
+            if column_names.is_empty() {
                 return;
             }
 
             ui.label("Result:");
             ui.separator();
-
-            let results = self.results.lock().unwrap();
-            let column_names = self.column_names.lock().unwrap();
 
             ui.push_id("table", |ui| {
                 TableBuilder::new(ui)
@@ -322,7 +316,6 @@ impl Widget for QueryTableWindow {
 
         let query = self.query.clone();
         let conn = self.conn.try_clone().unwrap();
-        let has_executed = Arc::clone(&self.has_executed);
         let results = Arc::clone(&self.results);
         let column_names = Arc::clone(&self.column_names);
         let error = Arc::clone(&self.error);
@@ -351,12 +344,11 @@ impl Widget for QueryTableWindow {
                 }
 
                 let executor = Arc::clone(&executor);
-                let has_executed = Arc::clone(&has_executed);
                 let results = Arc::clone(&results);
                 let column_names = Arc::clone(&column_names);
                 let error = Arc::clone(&error);
 
-                Self::_refresh(executor, has_executed, results, column_names, error);
+                Self::_refresh(executor, results, column_names, error);
             }
         }));
     }
