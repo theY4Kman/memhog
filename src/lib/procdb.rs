@@ -59,6 +59,9 @@ impl ProcDB {
         let db = Connection::open_in_memory().unwrap();
         // let db = Connection::open("procs.db").unwrap();
 
+        db.pragma_update(None, "threads", &"4").unwrap();
+        db.pragma_update(None, "memory_limit", &"128MB").unwrap();
+
         // language=sql
         db.execute_batch(
             "-- noinspection SqlResolveForFile @ object-type/UBIGINT
