@@ -2,6 +2,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use crate::lib::syntax_highlighting::add_code_view_ui;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use crossbeam::channel::{Receiver, Sender};
 use crossbeam::select;
@@ -306,13 +307,9 @@ impl Widget for QueryTableWindow {
                         },
                     });
 
-                ui.add_sized(
-                    [ui.available_width(), 0.0],
-                    egui::TextEdit::multiline(&mut query)
-                        .font(egui::TextStyle::Monospace)
-                        .code_editor()
-                        .desired_rows(10),
-                );
+                add_code_view_ui(ui, &mut query, |ui, query_editor| {
+                    ui.add_sized([ui.available_width(), 0.0], query_editor.desired_rows(10));
+                });
 
                 ui.vertical_centered(|ui| {
                     let run_button = ui.add_sized(

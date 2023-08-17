@@ -11,6 +11,7 @@ use crate::lib::query_table::QueryTableWindow;
 
 pub mod procdb;
 pub mod query_table;
+pub mod syntax_highlighting;
 
 pub trait Widget {
     fn view(&mut self, ctx: &Context, ui: &mut Ui);
