@@ -308,18 +308,23 @@ impl Widget for QueryTableWindow {
 
                 ui.add_sized(
                     [ui.available_width(), 0.0],
-                    egui::TextEdit::multiline(&mut query).desired_rows(10),
+                    egui::TextEdit::multiline(&mut query)
+                        .font(egui::TextStyle::Monospace)
+                        .code_editor()
+                        .desired_rows(10),
                 );
 
-                let run_button = ui.add_sized(
-                    [ui.available_width() / 2.0, 20.0],
-                    egui::Button::new("▶ Run"),
-                );
+                ui.vertical_centered(|ui| {
+                    let run_button = ui.add_sized(
+                        [ui.available_width() / 2.0, 20.0],
+                        egui::Button::new("▶ Run"),
+                    );
 
-                if run_button.clicked() {
-                    self.query = query.clone();
-                    self.parse_query();
-                }
+                    if run_button.clicked() {
+                        self.query = query.clone();
+                        self.parse_query();
+                    }
+                });
 
                 ui.data_mut(|storage| {
                     storage.insert_persisted(state_id, query.clone());
@@ -339,7 +344,6 @@ impl Widget for QueryTableWindow {
                 return;
             }
 
-            ui.label("Result:");
             ui.separator();
 
             ui.push_id("table", |ui| {
