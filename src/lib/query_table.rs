@@ -2,7 +2,6 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::lib::syntax_highlighting::add_code_view_ui;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use crossbeam::channel::{Receiver, Sender};
 use crossbeam::select;
@@ -15,6 +14,7 @@ use egui::Ui;
 use egui_extras::{Column, TableBuilder};
 use ouroboros::self_referencing;
 
+use crate::lib::syntax_highlighting::add_code_view_ui;
 use crate::lib::Widget;
 
 pub struct QueryTableWindow {
@@ -307,21 +307,35 @@ impl Widget for QueryTableWindow {
                         },
                     });
 
-                add_code_view_ui(ui, &mut query, |ui, query_editor| {
-                    ui.add_sized([ui.available_width(), 0.0], query_editor.desired_rows(10));
+                let is_run_kbd_shortcut_pressed = ui.input_mut(|input_state| {
+                    input_state.consume_shortcut(&egui::KeyboardShortcut::new(
+                        egui::Modifiers::CTRL,
+                        egui::Key::Enter,
+                    ))
                 });
 
-                ui.vertical_centered(|ui| {
-                    let run_button = ui.add_sized(
-                        [ui.available_width() / 2.0, 20.0],
-                        egui::Button::new("▶ Run"),
-                    );
+                let query_editor = ui
+                    .push_id("query", |ui| {
+                        add_code_view_ui(ui, &mut query, |ui, query_editor| {
+                            ui.add_sized([ui.available_width(), 0.0], query_editor.desired_rows(10))
+                        })
+                    })
+                    .inner;
 
-                    if run_button.clicked() {
-                        self.query = query.clone();
-                        self.parse_query();
-                    }
-                });
+                let run_button = ui
+                    .vertical_centered(|ui| {
+                        ui.add_sized(
+                            [ui.available_width() / 2.0, 20.0],
+                            egui::Button::new("▶ Run"),
+                        )
+                    })
+                    .inner;
+
+                if run_button.clicked() || (is_run_kbd_shortcut_pressed && query_editor.has_focus())
+                {
+                    self.query = query.clone();
+                    self.parse_query();
+                }
 
                 ui.data_mut(|storage| {
                     storage.insert_persisted(state_id, query.clone());

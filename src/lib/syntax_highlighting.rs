@@ -3,17 +3,15 @@ use egui::text::LayoutJob;
 static DRACULA_THEME: &'static str = include_str!("Dracula.tmTheme");
 
 /// View some code with syntax highlighting and selection.
-pub fn code_view_ui(ui: &mut egui::Ui, code: &mut String) {
-    add_code_view_ui(ui, code, |ui, code_view| {
-        ui.add(code_view);
-    });
+pub fn code_view_ui(ui: &mut egui::Ui, code: &mut String) -> egui::Response {
+    add_code_view_ui(ui, code, |ui, code_view| ui.add(code_view))
 }
 
-pub fn add_code_view_ui(
+pub fn add_code_view_ui<R>(
     ui: &mut egui::Ui,
     code: &mut String,
-    add_contents: impl FnOnce(&mut egui::Ui, egui::TextEdit),
-) {
+    add_contents: impl FnOnce(&mut egui::Ui, egui::TextEdit) -> R,
+) -> R {
     let language = "sql";
     let theme = CodeTheme::from_memory(ui.ctx());
 
@@ -27,7 +25,7 @@ pub fn add_code_view_ui(
         .code_editor()
         .layouter(&mut layouter);
 
-    add_contents(ui, code_view);
+    add_contents(ui, code_view)
 }
 
 /// Memoized Code highlighting
