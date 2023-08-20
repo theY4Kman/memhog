@@ -1,7 +1,8 @@
 use std::ops::DerefMut;
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
+use crossbeam::channel;
+use crossbeam::channel::{Receiver, Sender};
 use eframe::{CreationContext, Frame};
 use egui::{Context, Ui};
 
@@ -11,11 +12,12 @@ use crate::lib::query_table::QueryTableWindow;
 
 pub mod procdb;
 pub mod query_table;
+mod summary;
 pub mod syntax_highlighting;
 
 pub trait Widget {
     fn view(&mut self, ctx: &Context, ui: &mut Ui);
-    fn setup_refresh_channel(&mut self, on_refresh: crossbeam::channel::Receiver<()>) {}
+    fn setup_refresh_channel(&mut self, on_refresh: Receiver<()>) {}
 }
 
 enum WidgetMessage<'a> {
@@ -28,17 +30,19 @@ pub struct MemHogApp {
     proc_db: Arc<Mutex<ProcDB>>,
     query_thread: Option<std::thread::JoinHandle<()>>,
     context: Arc<Mutex<Context>>,
-    widget_refresh_tx: crossbeam::channel::Sender<()>,
-    widget_refresh_rx: crossbeam::channel::Receiver<()>,
+    widget_refresh_tx: Sender<()>,
+    widget_refresh_rx: Receiver<()>,
+
+    summary_panel: summary::SummaryPanel,
     widgets: Arc<Mutex<Vec<Box<dyn Widget>>>>,
 }
 
 impl MemHogApp {
     pub(crate) fn new(ctx: &CreationContext) -> Self {
-        let (refresh_tx, refresh_rx): (Sender<()>, Receiver<()>) = channel();
+        let (refresh_tx, refresh_rx): (Sender<()>, Receiver<()>) = channel::bounded(1);
         let on_refresh_tx = refresh_tx.clone();
 
-        let (widget_refresh_tx, widget_refresh_rx) = crossbeam::channel::unbounded();
+        let (widget_refresh_tx, widget_refresh_rx) = channel::unbounded();
 
         let mut slf = Self {
             proc_db: Arc::new(Mutex::new(ProcDB::new(Some(move || {
@@ -48,6 +52,8 @@ impl MemHogApp {
             context: Arc::new(Mutex::new(ctx.egui_ctx.clone())),
             widget_refresh_tx,
             widget_refresh_rx,
+
+            summary_panel: summary::SummaryPanel::default(),
             widgets: Arc::new(Mutex::new(Vec::new())),
         };
 
@@ -65,6 +71,9 @@ impl MemHogApp {
                 Err(_) => break,
             }
         }));
+
+        slf.summary_panel
+            .setup_refresh_channel(slf.widget_refresh_rx.clone());
 
         let query_win = Box::new(QueryTableWindow::new(
             slf.proc_db.lock().unwrap().cursor().unwrap(),
@@ -97,10 +106,8 @@ impl MemHogApp {
 
 impl eframe::App for MemHogApp {
     fn update(&mut self, ctx: &Context, frame: &mut Frame) {
-        egui::SidePanel::left("side_panel").show(ctx, |ui| {
-            ui.heading("MemHog");
-            ui.separator();
-            ui.label("Memory usage process explorer");
+        egui::SidePanel::left("summary_panel").show(ctx, |ui| {
+            self.summary_panel.view(ctx, ui);
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {

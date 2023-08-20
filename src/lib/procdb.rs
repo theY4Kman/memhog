@@ -1,14 +1,14 @@
 use std::fmt::Debug;
 use std::ops::DerefMut;
-use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use crossbeam::channel;
+use crossbeam::channel::Sender;
 use duckdb::{params, Connection};
 use psutil::process::os::linux::ProcessExt;
 use psutil::process::os::unix::{Gids, Uids};
 use psutil::process::{processes, ProcessError};
-use psutil::{Bytes, Pid};
 use timer::Guard;
 use users::{Groups, Users, UsersCache};
 
@@ -29,9 +29,12 @@ pub struct ProcDB {
 
     did_start: bool,
     refresh_thread: Option<thread::JoinHandle<()>>,
-    timer: Option<timer::Timer>,
-    periodic_timer: Option<Guard>,
     on_refresh: Callback,
+
+    refresh_interval: chrono::Duration,
+    timer: timer::Timer,
+    periodic_timer: Option<Guard>,
+    periodic_timer_tx: Option<Sender<()>>,
 }
 
 #[derive(Debug)]
@@ -112,8 +115,10 @@ impl ProcDB {
             on_refresh: on_refresh_cb,
             did_start: false,
             refresh_thread: None,
-            timer: None,
+            refresh_interval: chrono::Duration::seconds(1),
+            timer: timer::Timer::new(),
             periodic_timer: None,
+            periodic_timer_tx: None,
         };
 
         slf.start();
@@ -128,18 +133,14 @@ impl ProcDB {
 
         println!("Starting procdb");
 
-        let (tx, rx) = channel();
-
-        let timer = timer::Timer::new();
-        let periodic_timer = timer.schedule_repeating(chrono::Duration::seconds(1), move || {
-            tx.send(()).unwrap();
-        });
+        let (periodic_timer_tx, periodic_timer_rx) = channel::bounded(1);
+        self.periodic_timer_tx = Some(periodic_timer_tx);
 
         let db_mutex = Arc::clone(&self.db);
         let users_cache = Arc::clone(&self.users_cache);
         let on_refresh = Arc::clone(&self.on_refresh);
         let refresh_thread = thread::spawn(move || loop {
-            match rx.recv() {
+            match periodic_timer_rx.recv() {
                 Ok(_) => {
                     Self::_refresh_procs(
                         db_mutex.lock().unwrap().deref_mut(),
@@ -155,11 +156,36 @@ impl ProcDB {
         });
 
         self.refresh_thread = Some(refresh_thread);
-        self.timer = Some(timer);
-        self.periodic_timer = Some(periodic_timer);
+        self.restart_periodic_timer();
         self.did_start = true;
 
         println!("Started procdb");
+    }
+
+    pub(crate) fn set_refresh_interval(&mut self, interval: chrono::Duration) {
+        self.refresh_interval = interval;
+
+        if self.did_start {
+            self.restart_periodic_timer();
+        }
+    }
+
+    pub(crate) fn with_refresh_interval(&mut self, interval: chrono::Duration) -> &Self {
+        self.set_refresh_interval(interval);
+        self
+    }
+
+    fn restart_periodic_timer(&mut self) {
+        self.periodic_timer = None;
+
+        let periodic_timer_tx = self.periodic_timer_tx.as_ref().unwrap().clone();
+        let periodic_timer = self
+            .timer
+            .schedule_repeating(self.refresh_interval, move || {
+                periodic_timer_tx.send(()).ok();
+            });
+
+        self.periodic_timer = Some(periodic_timer);
     }
 
     pub(crate) fn stop(&mut self) {
@@ -168,7 +194,6 @@ impl ProcDB {
         }
 
         self.refresh_thread = None;
-        self.timer = None;
         self.periodic_timer = None;
         self.did_start = false;
 
