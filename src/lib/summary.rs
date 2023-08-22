@@ -26,14 +26,14 @@ impl Widget for SummaryPanel {
     fn view(&mut self, ctx: &Context, ui: &mut Ui) {
         ui.heading("MemHog");
         ui.separator();
-        ui.label("Memory usage process explorer");
+        ui.label("Memory usage process explorer\n");
 
         let mut virt_mem_binding = self.virt_mem.lock().unwrap();
         if let Some(virt_mem) = virt_mem_binding.as_ref() {
-            ui.label(format!("Total: {}", ByteSize(virt_mem.total())));
-            ui.label(format!("Available: {}", ByteSize(virt_mem.available())));
-            ui.label(format!("Used: {}", ByteSize(virt_mem.used())));
-            ui.label(format!("Free: {}", ByteSize(virt_mem.free())));
+            ui.label(format!("Total: {}", format_bytes(virt_mem.total())));
+            ui.label(format!("Available: {}", format_bytes(virt_mem.available())));
+            ui.label(format!("Used: {}", format_bytes(virt_mem.used())));
+            ui.label(format!("Free: {}", format_bytes(virt_mem.free())));
             ui.add(egui::ProgressBar::new(virt_mem.percent() as f32 / 100.0));
         }
     }
@@ -52,4 +52,8 @@ impl Widget for SummaryPanel {
             }
         }));
     }
+}
+
+fn format_bytes(size: impl Into<u64>) -> String {
+    ByteSize(size.into()).to_string_as(true)
 }
