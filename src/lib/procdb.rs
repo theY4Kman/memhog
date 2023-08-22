@@ -100,6 +100,10 @@ impl ProcDB {
                 memory_rss UBIGINT NOT NULL,
                 memory_vms UBIGINT NOT NULL
             );
+
+            -- Table used to stage inserts before swapping into procs
+            --  (this is used, because the duckdb appender has some strange behaviour within a transaction)
+            CREATE TABLE IF NOT EXISTS _procs_staging AS SELECT * FROM procs WHERE FALSE LIMIT 0;
             ",
         )
         .unwrap();
@@ -226,12 +230,9 @@ impl ProcDB {
             },
         };
 
-        db.execute_batch("TRUNCATE TABLE procs;")
-            .map_err(|e| ProcDBError::DuckDBError(e))?;
-
         {
             let mut appender = db
-                .appender("procs")
+                .appender("_procs_staging")
                 .map_err(|e| ProcDBError::DuckDBError(e))?;
 
             for res in procs {
@@ -309,6 +310,24 @@ impl ProcDB {
                     eprintln!("Error appending row for {}: {:?}", proc.pid(), e);
                 }
             }
+        }
+
+        {
+            let mut tx = db.transaction().map_err(|e| ProcDBError::DuckDBError(e))?;
+
+            // NB(zk): truncating procs within a transaction appears to be dangerous, resulting in
+            //         panics — likely due to threads reading while we truncate. But dropping the
+            //         existing table and renaming the staging table appears to work fine.
+            tx.execute_batch(
+                "\
+                DROP TABLE procs;\
+                ALTER TABLE _procs_staging RENAME TO procs;\
+                CREATE TABLE _procs_staging AS SELECT * FROM procs LIMIT 0;\
+                ",
+            )
+            .map_err(|e| ProcDBError::DuckDBError(e))?;
+
+            tx.commit().map_err(|e| ProcDBError::DuckDBError(e))?;
         }
 
         Ok(())
