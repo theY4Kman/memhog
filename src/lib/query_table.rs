@@ -10,14 +10,17 @@ use duckdb::types::{TimeUnit, ValueRef};
 use duckdb::{params, Connection, Rows, Statement};
 use eframe::epaint::text::LayoutSection;
 use egui::text::LayoutJob;
-use egui::Ui;
+use egui::{Id, Ui};
 use egui_extras::{Column, TableBuilder};
 use ouroboros::self_referencing;
+use uuid::Uuid;
 
 use crate::lib::syntax_highlighting::add_code_view_ui;
-use crate::lib::Widget;
+use crate::lib::{Widget, WidgetPersistentState};
 
 pub struct QueryTableWindow {
+    id: String,
+
     query: String,
     did_restore_query_state: bool,
     conn: Connection,
@@ -37,10 +40,24 @@ struct QueryTableState {
     error: Option<String>,
 }
 
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 struct QueryTableColumn {
     name: String,
     text_style: egui::TextStyle,
     text_align: egui::Align,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct QueryTablePersistentState {
+    query: String,
+    columns: Vec<QueryTableColumn>,
+}
+
+#[typetag::serde]
+impl WidgetPersistentState for QueryTablePersistentState {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl QueryTableColumn {
@@ -110,11 +127,13 @@ impl Clone for QueryExecutor {
 }
 
 impl QueryTableWindow {
-    pub fn new(conn: Connection, query: &str) -> Self {
+    pub fn new(conn: Connection, query: &str, id: Option<String>) -> Self {
         let (query_change_tx, query_change_rx): (Sender<String>, Receiver<String>) =
             crossbeam::channel::unbounded();
 
         let mut slf = Self {
+            id: id.unwrap_or_else(|| format!("query_table_{}", Uuid::new_v4())),
+
             query: query.to_string(),
             did_restore_query_state: false,
             conn,
@@ -134,6 +153,10 @@ impl QueryTableWindow {
         slf.parse_query();
 
         slf
+    }
+
+    pub fn id(&self) -> String {
+        self.id.clone()
     }
 
     pub fn parse_query(&self) {
@@ -290,101 +313,145 @@ impl QueryTableWindow {
 }
 
 impl Widget for QueryTableWindow {
+    fn get_id(&self) -> String {
+        self.id.clone()
+    }
+
+    fn get_state(&self) -> Option<Box<dyn WidgetPersistentState>> {
+        let state = self.state.lock().unwrap();
+        let state = state.deref();
+
+        let columns = state.columns.iter().cloned().collect();
+
+        Some(Box::new(QueryTablePersistentState {
+            query: self.query.clone(),
+            columns,
+        }))
+    }
+
+    fn load_state(&mut self, loaded_state: Box<dyn WidgetPersistentState>) -> Result<(), String> {
+        let loaded_state = match loaded_state
+            .as_any()
+            .downcast_ref::<QueryTablePersistentState>()
+        {
+            Some(state) => state,
+            None => return Err("Invalid state type".to_string()),
+        };
+        let loaded_state = loaded_state.deref();
+
+        self.query = loaded_state.query.clone();
+        self.parse_query();
+
+        let mut state_binding = self.state.lock().unwrap();
+        let state = state_binding.deref_mut();
+
+        state.columns = loaded_state.columns.iter().cloned().collect();
+
+        Ok(())
+    }
+
     fn view(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
-        egui::Window::new("Query").resizable(true).show(ctx, |ui| {
-            {
-                let state_id = ui.make_persistent_id("query");
-                let mut query =
-                    ui.data_mut(|storage| match storage.get_persisted::<String>(state_id) {
-                        None => self.query.clone(),
-                        Some(s) => {
-                            if !self.did_restore_query_state {
-                                self.did_restore_query_state = true;
-                                self.query = s.clone();
-                                self.parse_query();
-                            }
-                            s
-                        },
+        egui::Window::new("Query")
+            .id(Id::new(self.id.clone()))
+            .resizable(true)
+            .show(ctx, |ui| {
+                {
+                    let state_id = ui.make_persistent_id("query");
+                    let mut query =
+                        ui.data_mut(|storage| match storage.get_persisted::<String>(state_id) {
+                            None => self.query.clone(),
+                            Some(s) => {
+                                if !self.did_restore_query_state {
+                                    self.did_restore_query_state = true;
+                                    self.query = s.clone();
+                                    self.parse_query();
+                                }
+                                s
+                            },
+                        });
+
+                    let is_run_kbd_shortcut_pressed = ui.input_mut(|input_state| {
+                        input_state.consume_shortcut(&egui::KeyboardShortcut::new(
+                            egui::Modifiers::CTRL,
+                            egui::Key::Enter,
+                        ))
                     });
 
-                let is_run_kbd_shortcut_pressed = ui.input_mut(|input_state| {
-                    input_state.consume_shortcut(&egui::KeyboardShortcut::new(
-                        egui::Modifiers::CTRL,
-                        egui::Key::Enter,
-                    ))
-                });
-
-                let query_editor = ui
-                    .push_id("query", |ui| {
-                        add_code_view_ui(ui, &mut query, |ui, query_editor| {
-                            ui.add_sized([ui.available_width(), 0.0], query_editor.desired_rows(10))
+                    let query_editor = ui
+                        .push_id("query", |ui| {
+                            add_code_view_ui(ui, &mut query, |ui, query_editor| {
+                                ui.add_sized(
+                                    [ui.available_width(), 0.0],
+                                    query_editor.desired_rows(10),
+                                )
+                            })
                         })
-                    })
-                    .inner;
+                        .inner;
 
-                let run_button = ui
-                    .vertical_centered(|ui| {
-                        ui.add_sized(
-                            [ui.available_width() / 2.0, 20.0],
-                            egui::Button::new("▶ Run"),
-                        )
-                    })
-                    .inner;
+                    let run_button = ui
+                        .vertical_centered(|ui| {
+                            ui.add_sized(
+                                [ui.available_width() / 2.0, 20.0],
+                                egui::Button::new("▶ Run"),
+                            )
+                        })
+                        .inner;
 
-                if run_button.clicked() || (is_run_kbd_shortcut_pressed && query_editor.has_focus())
-                {
-                    self.query = query.clone();
-                    self.parse_query();
+                    if run_button.clicked()
+                        || (is_run_kbd_shortcut_pressed && query_editor.has_focus())
+                    {
+                        self.query = query.clone();
+                        self.parse_query();
+                    }
+
+                    ui.data_mut(|storage| {
+                        storage.insert_persisted(state_id, query.clone());
+                    });
                 }
 
-                ui.data_mut(|storage| {
-                    storage.insert_persisted(state_id, query.clone());
-                });
-            }
+                let state = self.state.lock().unwrap();
 
-            let state = self.state.lock().unwrap();
+                if let Some(error) = &state.error {
+                    ui.label(error);
+                }
 
-            if let Some(error) = &state.error {
-                ui.label(error);
-            }
+                let results = &state.results;
+                let columns = &state.columns;
 
-            let results = &state.results;
-            let columns = &state.columns;
+                if columns.is_empty() {
+                    return;
+                }
 
-            if columns.is_empty() {
-                return;
-            }
+                ui.separator();
 
-            ui.separator();
-
-            ui.push_id("table", |ui| {
-                TableBuilder::new(ui)
-                    .auto_shrink([false, true])
-                    .striped(true)
-                    .resizable(true)
-                    .selectable(true)
-                    .frame(true)
-                    .columns(Column::auto(), columns.len())
-                    .header(20.0, |mut header| {
-                        for col in columns.iter() {
-                            header.col(|ui| {
-                                col.label(ui, &col.name);
-                            });
-                        }
-                    })
-                    .body(|body| {
-                        body.rows(20.0, results.len(), |idx, mut row| {
-                            let data = &results[idx];
-                            for (col_idx, col_data) in data.iter().enumerate() {
-                                let col = &columns[col_idx];
-                                row.col(|ui| {
-                                    col.label(ui, col_data);
+                ui.push_id("table", |ui| {
+                    TableBuilder::new(ui)
+                        .auto_shrink([false, true])
+                        .striped(true)
+                        .resizable(true)
+                        .selectable(true)
+                        .frame(true)
+                        .columns(Column::auto(), columns.len())
+                        .header(20.0, |mut header| {
+                            for col in columns.iter() {
+                                header.col(|ui| {
+                                    col.label(ui, &col.name);
                                 });
                             }
+                        })
+                        .body(|body| {
+                            body.rows(20.0, results.len(), |idx, mut row| {
+                                let data = &results[idx];
+                                for (col_idx, col_data) in data.iter().enumerate() {
+                                    let col = &columns[col_idx];
+                                    row.col(|ui| {
+                                        col.label(ui, col_data);
+                                    });
+                                }
+                            });
                         });
-                    });
+                });
             });
-        });
     }
 
     fn setup_refresh_channel(&mut self, on_refresh: Receiver<()>) {

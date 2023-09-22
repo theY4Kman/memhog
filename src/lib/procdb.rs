@@ -57,10 +57,14 @@ impl From<duckdb::Error> for ProcDBError {
 }
 
 impl ProcDB {
-    pub(crate) fn new(on_refresh: Option<impl 'static + FnMut() + Send>) -> Self {
-        //XXX///////////////////////////////////////////////////////////////////////////////////////////
-        let db = Connection::open_in_memory().unwrap();
-        // let db = Connection::open("procs.db").unwrap();
+    pub(crate) fn new(db_path: String, on_refresh: Option<impl 'static + FnMut() + Send>) -> Self {
+        let config = duckdb::Config::default()
+            .max_memory("128MB")
+            .unwrap()
+            .threads(4)
+            .unwrap();
+
+        let db = Connection::open_with_flags(db_path, config).unwrap();
 
         db.pragma_update(None, "threads", &"4").unwrap();
         db.pragma_update(None, "memory_limit", &"128MB").unwrap();

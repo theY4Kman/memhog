@@ -9,6 +9,7 @@ incremental = true
 [dependencies]
 bytesize = "^1.2.0"
 chrono = "^0.4.26"
+clap = { version = "^4.3.17", features = ["derive"] }
 crossbeam = "^0.8.2"
 duckdb = { version = "^0.8.1" }
 eframe = { git = "https://github.com/theY4Kman/egui.git", branch = "table-row-select-and-frame", features = ["persistence", "serde"] }
@@ -20,3 +21,6 @@ serde = "^1.0.173"
 syntect = "^5.0.0"
 timer = "^0.2.0"
 users = "^0.11.0"
+uuid = { version = "1.4.1", features = ["v4"] }
+toml = "^0.8.0"
+typetag = "^0.2.13"

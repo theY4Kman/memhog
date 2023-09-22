@@ -23,6 +23,10 @@ impl Default for SummaryPanel {
 }
 
 impl Widget for SummaryPanel {
+    fn get_id(&self) -> String {
+        "Summary Panel".to_string()
+    }
+
     fn view(&mut self, ctx: &Context, ui: &mut Ui) {
         ui.heading("MemHog");
         ui.separator();

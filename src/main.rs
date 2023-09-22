@@ -2,7 +2,8 @@ mod lib;
 
 extern crate bytesize;
 
-use crate::lib::MemHogApp;
+use crate::lib::{MemHogApp, MemHogAppConfig};
+use clap::Parser;
 
 #[derive(Debug)]
 pub enum MemHogError {
@@ -12,6 +13,8 @@ pub enum MemHogError {
 }
 
 fn main() -> Result<(), MemHogError> {
+    let config = MemHogAppConfig::parse();
+
     let options = eframe::NativeOptions {
         initial_window_size: Some(egui::Vec2::new(1024.0, 768.0)),
         ..Default::default()
@@ -20,7 +23,7 @@ fn main() -> Result<(), MemHogError> {
     eframe::run_native(
         "MemHog",
         options,
-        Box::new(|_cc| Box::new(MemHogApp::new(_cc))),
+        Box::new(|_cc| Box::new(MemHogApp::new(_cc, config))),
     )
     .map_err(|e| MemHogError::EframeError(e))?;
 
